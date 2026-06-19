@@ -1,0 +1,797 @@
+From 6cd0a1a9d194ced4304a6e9425be6f91a7f8a226 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 19 Jun 2026 21:48:03 +0000
+Subject: [PATCH] =?UTF-8?q?Aggiunge=20pipeline=20Design=20=E2=86=92=20Code?=
+ =?UTF-8?q?=20=E2=86=92=20PR=20su=20/sviluppo?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Nuova pagina /sviluppo: da un messaggio in italiano, Claude Design prepara
+il progetto, poi (dopo conferma) Claude Code scrive il codice tramite tool use,
+e infine (dopo conferma) viene aperta una Pull Request su GitHub.
+
+- src/lib/anthropic.ts: client e modello condivisi
+- src/lib/github.ts: apertura PR multi-file via Git Data API (fetch, niente dipendenze)
+- src/app/api/design|code|pr: i tre stadi del flusso
+- src/app/sviluppo/page.tsx: UI con i due cancelli di approvazione
+- link Sviluppo nella dashboard, variabili GitHub in .env.example
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01BJ2XwjGaqZEYABsrj4FJaB
+---
+ .env.example                |   9 ++
+ LEGGIMI.md                  |  12 ++
+ src/app/api/code/route.ts   | 101 ++++++++++++
+ src/app/api/design/route.ts |  49 ++++++
+ src/app/api/pr/route.ts     |  33 ++++
+ src/app/page.tsx            |  11 +-
+ src/app/sviluppo/page.tsx   | 297 ++++++++++++++++++++++++++++++++++++
+ src/lib/anthropic.ts        |  15 ++
+ src/lib/github.ts           | 155 +++++++++++++++++++
+ 9 files changed, 680 insertions(+), 2 deletions(-)
+ create mode 100644 src/app/api/code/route.ts
+ create mode 100644 src/app/api/design/route.ts
+ create mode 100644 src/app/api/pr/route.ts
+ create mode 100644 src/app/sviluppo/page.tsx
+ create mode 100644 src/lib/anthropic.ts
+ create mode 100644 src/lib/github.ts
+
+diff --git a/.env.example b/.env.example
+index 2e28880..55d2309 100644
+--- a/.env.example
++++ b/.env.example
+@@ -7,3 +7,12 @@
+ # La stessa chiave che usi gia nel sito MyCity.
+ # La trovi in: console.anthropic.com -> Settings -> API Keys
+ ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxx
++
++# --- GITHUB (per aprire le Pull Request dalla pagina /sviluppo) ---
++# Token "fine-grained" o classico con permesso di scrittura sul repo (Contents + Pull requests).
++# Lo crei in: github.com -> Settings -> Developer settings -> Personal access tokens
++GITHUB_TOKEN=ghp_xxxxxxxxxxxx
++GITHUB_OWNER=NicolaeRotaru
++GITHUB_REPO=Assistente-mycity
++# Branch di base su cui aprire le PR (di solito "main").
++GITHUB_DEFAULT_BRANCH=main
+diff --git a/LEGGIMI.md b/LEGGIMI.md
+index 390c318..01f6ce8 100644
+--- a/LEGGIMI.md
++++ b/LEGGIMI.md
+@@ -6,6 +6,18 @@ Niente Supabase, niente Stripe: serve una sola chiave.
+ ## Cosa fa adesso
+ - Chat AI in italiano (modello Claude Sonnet)
+ - Dashboard con la chat e alcune metriche segnaposto
++- **Pagina /sviluppo**: scrivi una richiesta → **Claude Design** prepara il progetto
++  → (tu approvi) → **Claude Code** scrive il codice → (tu approvi) → si apre una
++  **Pull Request su GitHub**. Ogni passo passa dalla tua conferma.
++
++## La pagina /sviluppo (Design → Code → PR)
++1. Scrivi cosa vuoi fare (es: "aggiungi un pulsante Esci nell'header").
++2. Claude Design ti mostra il progetto. Lo approvi.
++3. Claude Code ti mostra i file modificati (contenuto completo). Li approvi.
++4. Viene aperta una Pull Request sul repo: la rivedi e fai il merge su GitHub.
++
++Serve un **token GitHub** (vedi `.env.example`: `GITHUB_TOKEN`, `GITHUB_OWNER`,
++`GITHUB_REPO`) con permesso di scrittura su *Contents* e *Pull requests*.
+ 
+ ## Avvio in locale (3 passi)
+ 1. `npm install`
+diff --git a/src/app/api/code/route.ts b/src/app/api/code/route.ts
+new file mode 100644
+index 0000000..f41391e
+--- /dev/null
++++ b/src/app/api/code/route.ts
+@@ -0,0 +1,101 @@
++import type Anthropic from "@anthropic-ai/sdk";
++import { NextRequest, NextResponse } from "next/server";
++import { getAnthropic, MODEL } from "@/lib/anthropic";
++import { listRepoFiles } from "@/lib/github";
++
++export const runtime = "nodejs";
++export const maxDuration = 120;
++
++const SYSTEM = `Sei "Claude Code", lo sviluppatore di MyCity (marketplace dei negozi di Piacenza).
++Stack del progetto: Next.js 15 (App Router), React 18, TypeScript, Tailwind CSS.
++Ricevi la richiesta dell'utente e il progetto preparato da "Claude Design".
++Devi produrre le modifiche di codice necessarie chiamando lo strumento "emit_changes".
++
++Regole:
++- Per ogni file che crei o modifichi, fornisci il contenuto COMPLETO del file (non frammenti, non diff).
++- Rispetta le convenzioni del progetto (Tailwind con colori brand/ink/paper, alias "@/..." per src).
++- Mantieni le modifiche minime e coerenti con il progetto.
++- "branch", "prTitle", "prBody" e "summary" in italiano. "summary" e "prBody" in Markdown.`;
++
++const TOOL: Anthropic.Tool = {
++  name: "emit_changes",
++  description:
++    "Restituisce le modifiche di codice da applicare e i metadati per aprire la Pull Request.",
++  input_schema: {
++    type: "object",
++    properties: {
++      summary: {
++        type: "string",
++        description: "Riassunto in italiano (Markdown) di cosa e' stato fatto.",
++      },
++      branch: {
++        type: "string",
++        description: "Slug breve in kebab-case per il branch, es. 'fix-carrello'.",
++      },
++      prTitle: { type: "string", description: "Titolo della Pull Request." },
++      prBody: {
++        type: "string",
++        description: "Descrizione della Pull Request in Markdown.",
++      },
++      files: {
++        type: "array",
++        description: "File da creare o modificare, con contenuto completo.",
++        items: {
++          type: "object",
++          properties: {
++            path: { type: "string", description: "Percorso dalla root, es. 'src/app/page.tsx'." },
++            content: { type: "string", description: "Contenuto COMPLETO del file." },
++          },
++          required: ["path", "content"],
++        },
++      },
++    },
++    required: ["summary", "branch", "prTitle", "prBody", "files"],
++  },
++};
++
++export async function POST(req: NextRequest) {
++  try {
++    const { instruction, design } = await req.json();
++    if (!instruction || !design) {
++      return NextResponse.json(
++        { error: "Servono sia la richiesta sia il progetto." },
++        { status: 400 }
++      );
++    }
++
++    const repoFiles = await listRepoFiles();
++    const contesto = repoFiles.length
++      ? `\n\nFile attualmente presenti nel repo:\n${repoFiles.join("\n")}`
++      : "";
++
++    const anthropic = getAnthropic();
++    const res = await anthropic.messages.create({
++      model: MODEL,
++      max_tokens: 8000,
++      system: SYSTEM,
++      tools: [TOOL],
++      tool_choice: { type: "tool", name: "emit_changes" },
++      messages: [
++        {
++          role: "user",
++          content: `Richiesta dell'utente:\n${instruction}\n\nProgetto di Claude Design:\n${design}${contesto}`,
++        },
++      ],
++    });
++
++    const block = res.content.find(
++      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
++    );
++    if (!block) {
++      return NextResponse.json(
++        { error: "Claude Code non ha prodotto modifiche strutturate." },
++        { status: 502 }
++      );
++    }
++
++    return NextResponse.json(block.input);
++  } catch (e: any) {
++    return NextResponse.json({ error: e.message }, { status: 500 });
++  }
++}
+diff --git a/src/app/api/design/route.ts b/src/app/api/design/route.ts
+new file mode 100644
+index 0000000..2c449bc
+--- /dev/null
++++ b/src/app/api/design/route.ts
+@@ -0,0 +1,49 @@
++import type Anthropic from "@anthropic-ai/sdk";
++import { NextRequest, NextResponse } from "next/server";
++import { getAnthropic, MODEL } from "@/lib/anthropic";
++
++export const runtime = "nodejs";
++export const maxDuration = 60;
++
++const SYSTEM = `Sei "Claude Design", il progettista di MyCity (il marketplace dei negozi di Piacenza).
++Ricevi una richiesta in italiano dall'utente e produci un progetto chiaro e conciso PRIMA che venga scritto il codice.
++
++Rispondi SEMPRE in italiano e in Markdown, con queste sezioni:
++## Obiettivo
++Una frase su cosa si vuole ottenere.
++## Cosa cambia per l'utente
++Comportamento atteso, in parole semplici.
++## File coinvolti
++Elenco dei file da creare o modificare (percorsi probabili) con una riga di spiegazione ciascuno.
++## Criteri di accettazione
++Lista puntata di condizioni verificabili per dire che e' fatto.
++## Note / rischi
++Eventuali dubbi o cose da decidere.
++
++Sii pratico e specifico. Non scrivere codice: solo il progetto.`;
++
++export async function POST(req: NextRequest) {
++  try {
++    const { instruction } = await req.json();
++    if (!instruction || typeof instruction !== "string") {
++      return NextResponse.json({ error: "Richiesta mancante." }, { status: 400 });
++    }
++
++    const anthropic = getAnthropic();
++    const res = await anthropic.messages.create({
++      model: MODEL,
++      max_tokens: 1500,
++      system: SYSTEM,
++      messages: [{ role: "user", content: instruction }],
++    });
++
++    const design = res.content
++      .filter((b): b is Anthropic.TextBlock => b.type === "text")
++      .map((b) => b.text)
++      .join("\n");
++
++    return NextResponse.json({ design });
++  } catch (e: any) {
++    return NextResponse.json({ error: e.message }, { status: 500 });
++  }
++}
+diff --git a/src/app/api/pr/route.ts b/src/app/api/pr/route.ts
+new file mode 100644
+index 0000000..602d3d3
+--- /dev/null
++++ b/src/app/api/pr/route.ts
+@@ -0,0 +1,33 @@
++import { NextRequest, NextResponse } from "next/server";
++import { createPullRequest, type ChangedFile } from "@/lib/github";
++
++export const runtime = "nodejs";
++export const maxDuration = 60;
++
++export async function POST(req: NextRequest) {
++  try {
++    const { branch, prTitle, prBody, files } = await req.json();
++
++    if (!Array.isArray(files) || files.length === 0) {
++      return NextResponse.json({ error: "Nessun file da inviare." }, { status: 400 });
++    }
++    const cleanFiles: ChangedFile[] = files
++      .filter((f: any) => f && typeof f.path === "string" && typeof f.content === "string")
++      .map((f: any) => ({ path: f.path, content: f.content }));
++
++    if (!cleanFiles.length) {
++      return NextResponse.json({ error: "File non validi." }, { status: 400 });
++    }
++
++    const pr = await createPullRequest({
++      branch: branch || "assistant-change",
++      title: prTitle || "Modifica da MyCity Assistant",
++      body: prBody || "Generata automaticamente da MyCity Assistant.",
++      files: cleanFiles,
++    });
++
++    return NextResponse.json(pr);
++  } catch (e: any) {
++    return NextResponse.json({ error: e.message }, { status: 500 });
++  }
++}
+diff --git a/src/app/page.tsx b/src/app/page.tsx
+index a257f74..ac74b2e 100644
+--- a/src/app/page.tsx
++++ b/src/app/page.tsx
+@@ -1,7 +1,8 @@
+ "use client";
+ 
+ import { useState, useRef, useEffect } from "react";
+-import { Send, Store, Package, Bell, Euro, Loader2 } from "lucide-react";
++import Link from "next/link";
++import { Send, Store, Package, Bell, Euro, Loader2, Code2 } from "lucide-react";
+ 
+ type Msg = { role: "user" | "assistant"; content: string };
+ 
+@@ -53,7 +54,13 @@ export default function Dashboard() {
+         <div className="max-w-5xl mx-auto px-5 py-4 flex items-center gap-2">
+           <span className="w-2.5 h-2.5 rounded-full bg-brand" />
+           <h1 className="font-semibold text-lg">MyCity Assistant</h1>
+-          <span className="ml-auto text-sm text-black/40">Piacenza</span>
++          <Link
++            href="/sviluppo"
++            className="ml-auto inline-flex items-center gap-1.5 text-sm text-brand border border-brand/30 rounded-full px-3 py-1.5 hover:bg-brand/5"
++          >
++            <Code2 size={15} /> Sviluppo
++          </Link>
++          <span className="text-sm text-black/40">Piacenza</span>
+         </div>
+       </header>
+ 
+diff --git a/src/app/sviluppo/page.tsx b/src/app/sviluppo/page.tsx
+new file mode 100644
+index 0000000..f24ac01
+--- /dev/null
++++ b/src/app/sviluppo/page.tsx
+@@ -0,0 +1,297 @@
++"use client";
++
++import { useState } from "react";
++import Link from "next/link";
++import {
++  ArrowLeft,
++  Wand2,
++  Code2,
++  GitPullRequest,
++  Loader2,
++  CheckCircle2,
++  AlertTriangle,
++  ChevronDown,
++} from "lucide-react";
++
++type ChangedFile = { path: string; content: string };
++type CodeResult = {
++  summary: string;
++  branch: string;
++  prTitle: string;
++  prBody: string;
++  files: ChangedFile[];
++};
++type PrResult = { url: string; number: number; branch: string };
++
++type Step =
++  | "idle"
++  | "designing"
++  | "design"
++  | "coding"
++  | "code"
++  | "creating"
++  | "done";
++
++export default function Sviluppo() {
++  const [step, setStep] = useState<Step>("idle");
++  const [instruction, setInstruction] = useState("");
++  const [design, setDesign] = useState("");
++  const [code, setCode] = useState<CodeResult | null>(null);
++  const [pr, setPr] = useState<PrResult | null>(null);
++  const [error, setError] = useState("");
++
++  const busy = step === "designing" || step === "coding" || step === "creating";
++
++  async function call<T>(url: string, body: unknown): Promise<T> {
++    const res = await fetch(url, {
++      method: "POST",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify(body),
++    });
++    const data = await res.json();
++    if (!res.ok) throw new Error(data.error || "Errore sconosciuto.");
++    return data as T;
++  }
++
++  async function runDesign() {
++    const text = instruction.trim();
++    if (!text || busy) return;
++    setError("");
++    setCode(null);
++    setPr(null);
++    setStep("designing");
++    try {
++      const data = await call<{ design: string }>("/api/design", { instruction: text });
++      setDesign(data.design);
++      setStep("design");
++    } catch (e: any) {
++      setError(e.message);
++      setStep("idle");
++    }
++  }
++
++  async function runCode() {
++    if (busy) return;
++    setError("");
++    setStep("coding");
++    try {
++      const data = await call<CodeResult>("/api/code", { instruction, design });
++      setCode(data);
++      setStep("code");
++    } catch (e: any) {
++      setError(e.message);
++      setStep("design");
++    }
++  }
++
++  async function createPr() {
++    if (busy || !code) return;
++    setError("");
++    setStep("creating");
++    try {
++      const data = await call<PrResult>("/api/pr", {
++        branch: code.branch,
++        prTitle: code.prTitle,
++        prBody: code.prBody,
++        files: code.files,
++      });
++      setPr(data);
++      setStep("done");
++    } catch (e: any) {
++      setError(e.message);
++      setStep("code");
++    }
++  }
++
++  function reset() {
++    setStep("idle");
++    setInstruction("");
++    setDesign("");
++    setCode(null);
++    setPr(null);
++    setError("");
++  }
++
++  return (
++    <div className="min-h-screen flex flex-col">
++      <header className="border-b border-black/10 bg-white">
++        <div className="max-w-3xl mx-auto px-5 py-4 flex items-center gap-3">
++          <Link href="/" className="text-black/40 hover:text-black/70" aria-label="Indietro">
++            <ArrowLeft size={18} />
++          </Link>
++          <h1 className="font-semibold text-lg">Sviluppo</h1>
++          <span className="ml-auto text-sm text-black/40">Design → Code → Pull Request</span>
++        </div>
++      </header>
++
++      <main className="flex-1 max-w-3xl w-full mx-auto px-5 py-6 space-y-5">
++        {/* Step 1: la richiesta */}
++        <section className="bg-white rounded-xl border border-black/10 p-5">
++          <label className="text-sm text-black/50 mb-2 block">
++            Cosa vuoi che venga fatto? (in italiano)
++          </label>
++          <textarea
++            value={instruction}
++            onChange={(e) => setInstruction(e.target.value)}
++            disabled={step !== "idle" && step !== "designing"}
++            rows={3}
++            placeholder="Es: aggiungi un pulsante 'Esci' nell'header del sito"
++            className="w-full px-4 py-3 rounded-lg bg-black/5 outline-none text-sm focus:ring-2 focus:ring-brand/30 disabled:opacity-60"
++          />
++          {(step === "idle" || step === "designing") && (
++            <button
++              onClick={runDesign}
++              disabled={busy || !instruction.trim()}
++              className="mt-3 inline-flex items-center gap-2 bg-brand text-white px-4 py-2.5 rounded-lg text-sm hover:opacity-90 disabled:opacity-40"
++            >
++              {step === "designing" ? (
++                <Loader2 size={16} className="animate-spin" />
++              ) : (
++                <Wand2 size={16} />
++              )}
++              Chiedi a Claude Design
++            </button>
++          )}
++        </section>
++
++        {error && (
++          <div className="flex items-start gap-2 bg-red-50 text-red-700 border border-red-200 rounded-lg p-4 text-sm">
++            <AlertTriangle size={16} className="mt-0.5 shrink-0" />
++            <span className="whitespace-pre-wrap">{error}</span>
++          </div>
++        )}
++
++        {/* Step 2: il progetto di Claude Design */}
++        {(step === "design" || step === "coding" || step === "code" || step === "creating" || step === "done") && (
++          <section className="bg-white rounded-xl border border-black/10 p-5">
++            <div className="flex items-center gap-2 text-black/60 text-sm font-medium mb-3">
++              <Wand2 size={16} className="text-brand" /> Claude Design — il progetto
++            </div>
++            <pre className="whitespace-pre-wrap font-sans text-sm text-ink/90 leading-relaxed">
++              {design}
++            </pre>
++            {step === "design" && (
++              <div className="mt-4 flex gap-2">
++                <button
++                  onClick={runCode}
++                  className="inline-flex items-center gap-2 bg-brand text-white px-4 py-2.5 rounded-lg text-sm hover:opacity-90"
++                >
++                  <Code2 size={16} /> Approva → Claude Code scrive il codice
++                </button>
++                <button
++                  onClick={reset}
++                  className="px-4 py-2.5 rounded-lg text-sm border border-black/15 hover:bg-black/5"
++                >
++                  Ricomincia
++                </button>
++              </div>
++            )}
++            {step === "coding" && (
++              <div className="mt-4 flex items-center gap-2 text-black/40 text-sm">
++                <Loader2 size={16} className="animate-spin" /> Claude Code sta scrivendo il codice...
++              </div>
++            )}
++          </section>
++        )}
++
++        {/* Step 3: il codice di Claude Code */}
++        {code && (step === "code" || step === "creating" || step === "done") && (
++          <section className="bg-white rounded-xl border border-black/10 p-5">
++            <div className="flex items-center gap-2 text-black/60 text-sm font-medium mb-3">
++              <Code2 size={16} className="text-brand" /> Claude Code — le modifiche proposte
++            </div>
++            <pre className="whitespace-pre-wrap font-sans text-sm text-ink/90 leading-relaxed mb-3">
++              {code.summary}
++            </pre>
++
++            <div className="text-xs text-black/40 mb-1">Titolo PR</div>
++            <div className="text-sm font-medium mb-3">{code.prTitle}</div>
++
++            <div className="text-xs text-black/40 mb-2">
++              File ({code.files.length})
++            </div>
++            <div className="space-y-2">
++              {code.files.map((f) => (
++                <FileBlock key={f.path} file={f} />
++              ))}
++            </div>
++
++            {step === "code" && (
++              <div className="mt-4 flex gap-2">
++                <button
++                  onClick={createPr}
++                  className="inline-flex items-center gap-2 bg-brand text-white px-4 py-2.5 rounded-lg text-sm hover:opacity-90"
++                >
++                  <GitPullRequest size={16} /> Crea la Pull Request su GitHub
++                </button>
++                <button
++                  onClick={reset}
++                  className="px-4 py-2.5 rounded-lg text-sm border border-black/15 hover:bg-black/5"
++                >
++                  Annulla
++                </button>
++              </div>
++            )}
++            {step === "creating" && (
++              <div className="mt-4 flex items-center gap-2 text-black/40 text-sm">
++                <Loader2 size={16} className="animate-spin" /> Apro la Pull Request su GitHub...
++              </div>
++            )}
++          </section>
++        )}
++
++        {/* Step 4: PR creata */}
++        {pr && step === "done" && (
++          <section className="bg-white rounded-xl border border-green-200 p-5">
++            <div className="flex items-center gap-2 text-green-700 font-medium mb-2">
++              <CheckCircle2 size={18} /> Pull Request #{pr.number} creata
++            </div>
++            <p className="text-sm text-black/60 mb-3">
++              Branch <code className="bg-black/5 px-1.5 py-0.5 rounded">{pr.branch}</code>.
++              Aprila su GitHub per rivederla e farne il merge.
++            </p>
++            <div className="flex gap-2">
++              <a
++                href={pr.url}
++                target="_blank"
++                rel="noopener noreferrer"
++                className="inline-flex items-center gap-2 bg-brand text-white px-4 py-2.5 rounded-lg text-sm hover:opacity-90"
++              >
++                <GitPullRequest size={16} /> Apri la Pull Request
++              </a>
++              <button
++                onClick={reset}
++                className="px-4 py-2.5 rounded-lg text-sm border border-black/15 hover:bg-black/5"
++              >
++                Nuova richiesta
++              </button>
++            </div>
++          </section>
++        )}
++      </main>
++    </div>
++  );
++}
++
++function FileBlock({ file }: { file: ChangedFile }) {
++  const [open, setOpen] = useState(false);
++  return (
++    <div className="border border-black/10 rounded-lg overflow-hidden">
++      <button
++        onClick={() => setOpen((v) => !v)}
++        className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-black/5"
++      >
++        <ChevronDown
++          size={15}
++          className={`transition-transform ${open ? "" : "-rotate-90"}`}
++        />
++        <code className="text-ink">{file.path}</code>
++      </button>
++      {open && (
++        <pre className="text-xs bg-ink/95 text-paper p-3 overflow-x-auto leading-relaxed">
++          {file.content}
++        </pre>
++      )}
++    </div>
++  );
++}
+diff --git a/src/lib/anthropic.ts b/src/lib/anthropic.ts
+new file mode 100644
+index 0000000..2f6b115
+--- /dev/null
++++ b/src/lib/anthropic.ts
+@@ -0,0 +1,15 @@
++import Anthropic from "@anthropic-ai/sdk";
++
++// Modello unico per tutto l'assistente: intelligente ma economico.
++export const MODEL = "claude-sonnet-4-6";
++
++// Client creato a ogni chiamata: cosi il build non richiede la chiave.
++export function getAnthropic() {
++  const apiKey = process.env.ANTHROPIC_API_KEY;
++  if (!apiKey) {
++    throw new Error(
++      "ANTHROPIC_API_KEY mancante. Aggiungila in .env.local (locale) o nelle Environment Variables di Vercel."
++    );
++  }
++  return new Anthropic({ apiKey });
++}
+diff --git a/src/lib/github.ts b/src/lib/github.ts
+new file mode 100644
+index 0000000..224c026
+--- /dev/null
++++ b/src/lib/github.ts
+@@ -0,0 +1,155 @@
++export type ChangedFile = { path: string; content: string };
++
++const API = "https://api.github.com";
++
++type RepoConfig = {
++  token: string;
++  owner: string;
++  repo: string;
++  baseBranch: string;
++};
++
++function getConfig(): RepoConfig {
++  const token = process.env.GITHUB_TOKEN;
++  const owner = process.env.GITHUB_OWNER;
++  const repo = process.env.GITHUB_REPO;
++  const baseBranch = process.env.GITHUB_DEFAULT_BRANCH || "main";
++
++  if (!token || !owner || !repo) {
++    throw new Error(
++      "Config GitHub mancante. Servono GITHUB_TOKEN, GITHUB_OWNER e GITHUB_REPO nelle variabili d'ambiente."
++    );
++  }
++  return { token, owner, repo, baseBranch };
++}
++
++async function gh<T>(token: string, path: string, init?: RequestInit): Promise<T> {
++  const res = await fetch(`${API}${path}`, {
++    ...init,
++    headers: {
++      Authorization: `Bearer ${token}`,
++      Accept: "application/vnd.github+json",
++      "X-GitHub-Api-Version": "2022-11-28",
++      "User-Agent": "mycity-assistant",
++      "Content-Type": "application/json",
++      ...(init?.headers || {}),
++    },
++  });
++  const data = await res.json();
++  if (!res.ok) {
++    throw new Error(`GitHub ${res.status}: ${data.message || "errore"}`);
++  }
++  return data as T;
++}
++
++/**
++ * Restituisce l'elenco dei percorsi dei file del repo (per dare contesto a Claude Code).
++ * Best-effort: se la config GitHub manca o l'API fallisce, torna una lista vuota.
++ */
++export async function listRepoFiles(): Promise<string[]> {
++  let cfg: RepoConfig;
++  try {
++    cfg = getConfig();
++  } catch {
++    return [];
++  }
++  const { token, owner, repo, baseBranch } = cfg;
++  try {
++    const ref = await gh<{ object: { sha: string } }>(
++      token,
++      `/repos/${owner}/${repo}/git/ref/heads/${baseBranch}`
++    );
++    const commit = await gh<{ tree: { sha: string } }>(
++      token,
++      `/repos/${owner}/${repo}/git/commits/${ref.object.sha}`
++    );
++    const tree = await gh<{ tree: { path: string; type: string }[] }>(
++      token,
++      `/repos/${owner}/${repo}/git/trees/${commit.tree.sha}?recursive=1`
++    );
++    return tree.tree.filter((t) => t.type === "blob" && t.path).map((t) => t.path);
++  } catch {
++    return [];
++  }
++}
++
++/**
++ * Crea un branch nuovo con i file indicati e apre una Pull Request verso il branch base.
++ * Commit multi-file atomico tramite la Git Data API di GitHub.
++ */
++export async function createPullRequest(params: {
++  branch: string;
++  title: string;
++  body: string;
++  files: ChangedFile[];
++}): Promise<{ url: string; number: number; branch: string }> {
++  const { token, owner, repo, baseBranch } = getConfig();
++  const base = `/repos/${owner}/${repo}`;
++
++  if (!params.files.length) {
++    throw new Error("Nessun file da modificare: Claude Code non ha prodotto cambiamenti.");
++  }
++
++  // 1) Punto di partenza: ultimo commit del branch base.
++  const ref = await gh<{ object: { sha: string } }>(
++    token,
++    `${base}/git/ref/heads/${baseBranch}`
++  );
++  const baseSha = ref.object.sha;
++  const baseCommit = await gh<{ tree: { sha: string } }>(
++    token,
++    `${base}/git/commits/${baseSha}`
++  );
++
++  // 2) Nome branch univoco (evita collisioni se ripeti la stessa richiesta).
++  const slug =
++    (params.branch || "assistant-change")
++      .toLowerCase()
++      .replace(/[^a-z0-9-]+/g, "-")
++      .replace(/^-+|-+$/g, "")
++      .slice(0, 50) || "assistant-change";
++  const branch = `mycity/${slug}-${Date.now().toString(36)}`;
++
++  // 3) Albero con i file nuovi/modificati, basato sull'albero del commit base.
++  const tree = await gh<{ sha: string }>(token, `${base}/git/trees`, {
++    method: "POST",
++    body: JSON.stringify({
++      base_tree: baseCommit.tree.sha,
++      tree: params.files.map((f) => ({
++        path: f.path,
++        mode: "100644",
++        type: "blob",
++        content: f.content,
++      })),
++    }),
++  });
++
++  // 4) Commit con quell'albero.
++  const commit = await gh<{ sha: string }>(token, `${base}/git/commits`, {
++    method: "POST",
++    body: JSON.stringify({
++      message: params.title,
++      tree: tree.sha,
++      parents: [baseSha],
++    }),
++  });
++
++  // 5) Crea il branch puntando al nuovo commit.
++  await gh(token, `${base}/git/refs`, {
++    method: "POST",
++    body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: commit.sha }),
++  });
++
++  // 6) Apre la Pull Request.
++  const pr = await gh<{ html_url: string; number: number }>(token, `${base}/pulls`, {
++    method: "POST",
++    body: JSON.stringify({
++      title: params.title,
++      head: branch,
++      base: baseBranch,
++      body: params.body,
++    }),
++  });
++
++  return { url: pr.html_url, number: pr.number, branch };
++}
+-- 
+2.43.0
+
