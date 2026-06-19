@@ -14,10 +14,16 @@ Niente Supabase, niente Stripe: serve una sola chiave.
 1. Scrivi cosa vuoi fare (es: "aggiungi un pulsante Esci nell'header").
 2. Claude Design ti mostra il progetto. Lo approvi.
 3. Claude Code ti mostra i file modificati (contenuto completo). Li approvi.
-4. Viene aperta una Pull Request sul repo: la rivedi e fai il merge su GitHub.
+4. Viene aperta una Pull Request sul repo del marketplace: la rivedi e fai il merge su GitHub.
+
+**Su quale repo apre le PR?** Su quello indicato da `GITHUB_OWNER`/`GITHUB_REPO`.
+Di default punta al **marketplace `mycity`** (il sito vero), così le modifiche che
+chiedi finiscono lì e non su questo assistente. Per cambiare bersaglio, modifica
+`GITHUB_REPO`.
 
 Serve un **token GitHub** (vedi `.env.example`: `GITHUB_TOKEN`, `GITHUB_OWNER`,
-`GITHUB_REPO`) con permesso di scrittura su *Contents* e *Pull requests*.
+`GITHUB_REPO`) con accesso in scrittura al repo di destinazione (*Contents* e
+*Pull requests*).
 
 ## Avvio in locale (3 passi)
 1. `npm install`
