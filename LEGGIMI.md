@@ -6,6 +6,18 @@ Niente Supabase, niente Stripe: serve una sola chiave.
 ## Cosa fa adesso
 - Chat AI in italiano (modello Claude Sonnet)
 - Dashboard con la chat e alcune metriche segnaposto
+- **Pagina /sviluppo**: scrivi una richiesta → **Claude Design** prepara il progetto
+  → (tu approvi) → **Claude Code** scrive il codice → (tu approvi) → si apre una
+  **Pull Request su GitHub**. Ogni passo passa dalla tua conferma.
+
+## La pagina /sviluppo (Design → Code → PR)
+1. Scrivi cosa vuoi fare (es: "aggiungi un pulsante Esci nell'header").
+2. Claude Design ti mostra il progetto. Lo approvi.
+3. Claude Code ti mostra i file modificati (contenuto completo). Li approvi.
+4. Viene aperta una Pull Request sul repo: la rivedi e fai il merge su GitHub.
+
+Serve un **token GitHub** (vedi `.env.example`: `GITHUB_TOKEN`, `GITHUB_OWNER`,
+`GITHUB_REPO`) con permesso di scrittura su *Contents* e *Pull requests*.
 
 ## Avvio in locale (3 passi)
 1. `npm install`
