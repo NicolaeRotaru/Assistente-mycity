@@ -1,21 +1,14 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { getAnthropic, MODEL } from "@/lib/anthropic";
-import { CUSTOM_TOOLS, executeCustomTool } from "@/lib/tools";
+import { toolsFor, executeCustomTool } from "@/lib/tools";
+import { trovaEsperto, type Esperto } from "@/lib/agents";
 import { saveBriefing, type Briefing } from "@/lib/store";
 import { getMetriche } from "@/lib/marketplace-db";
 
-// Il "giro di perlustrazione" autonomo: l'assistente lavora DA SOLO, anche se
-// nessuno gli ha scritto. Parte SEMPRE dai dati reali del marketplace, poi
-// ragiona e prepara cosa proporre.
+// Il giro di perlustrazione autonomo, ora svolto dal TEAM: l'Analista guarda i
+// numeri, l'Intelligence cerca opportunita' esterne, l'AD sintetizza il briefing.
 
-const SYSTEM_PERLUSTRA = `Sei l'AD digitale di MyCity, il marketplace dei negozi di Piacenza.
-Questo e' un tuo GIRO DI PERLUSTRAZIONE AUTONOMO: nessuno ti ha scritto, sei tu che ti metti al lavoro.
-Ricevi i DATI REALI attuali dell'azienda. Il tuo compito: leggerli, capire cosa sta succedendo e individuare opportunita' concrete per far crescere l'azienda (piu' ordini, piu' clienti, piu' incassi).
-
-Puoi approfondire con gli strumenti (dati_query per dettagli dal database, marketplace_* per il codice del sito), ma hai gia' i numeri principali: usali.
-Scrivi un'analisi concreta e operativa, specifica e orientata all'azione. Niente frasi generiche.`;
-
-const SYSTEM_BRIEFING = `Trasforma l'analisi in un briefing strutturato per il proprietario.
+const SYSTEM_BRIEFING = `Sei l'AD digitale di MyCity. Sintetizza i contributi del team in un briefing per il proprietario.
 Per ogni azione assegna un livello:
 - "verde": reversibile e a basso rischio (l'assistente potrebbe farla da solo)
 - "giallo": impatto medio (meglio avvisare)
@@ -28,7 +21,7 @@ const EMIT: Anthropic.Tool = {
   input_schema: {
     type: "object",
     properties: {
-      situazione: { type: "string", description: "Cosa hai scoperto / la situazione, in 2-4 frasi." },
+      situazione: { type: "string", description: "Cosa e' emerso / la situazione, in 2-4 frasi." },
       opportunita: {
         type: "array",
         description: "Opportunita' per crescere, dalla piu' grande alla piu' piccola.",
@@ -61,8 +54,6 @@ const EMIT: Anthropic.Tool = {
   },
 };
 
-const TOOLS: any[] = [...CUSTOM_TOOLS]; // niente web_search nel giro: piu' veloce, economico e affidabile
-
 function testo(res: any): string {
   return (res.content as any[])
     .filter((b) => b.type === "text")
@@ -71,30 +62,29 @@ function testo(res: any): string {
     .trim();
 }
 
-async function perlustra(anthropic: Anthropic, datiTxt: string): Promise<string> {
-  const convo: any[] = [
-    {
-      role: "user",
-      content: `${datiTxt}\n\nFai ora il tuo giro: analizza questi numeri, se serve approfondisci, e scrivi un'analisi con opportunita' di crescita concrete.`,
-    },
-  ];
+// Esegue un esperto su un compito, con i suoi strumenti dedicati.
+async function runEsperto(anthropic: Anthropic, esperto: Esperto, prompt: string): Promise<string> {
+  const convo: any[] = [{ role: "user", content: prompt }];
+  const tools = toolsFor(esperto.strumenti);
   for (let i = 0; i < 5; i++) {
     const res = await anthropic.messages.create({
       model: MODEL,
-      max_tokens: 1800,
-      system: SYSTEM_PERLUSTRA,
-      tools: TOOLS,
+      max_tokens: 1600,
+      system: esperto.system,
+      tools,
       messages: convo,
     });
     if (res.stop_reason === "tool_use") {
       convo.push({ role: "assistant", content: res.content });
       const results: any[] = [];
       for (const b of res.content as any[]) {
-        if (b.type === "tool_use") {
-          results.push({ type: "tool_result", tool_use_id: b.id, content: await executeCustomTool(b.name, b.input) });
-        }
+        if (b.type === "tool_use") results.push({ type: "tool_result", tool_use_id: b.id, content: await executeCustomTool(b.name, b.input) });
       }
       convo.push({ role: "user", content: results });
+      continue;
+    }
+    if (res.stop_reason === "pause_turn") {
+      convo.push({ role: "assistant", content: res.content });
       continue;
     }
     return testo(res);
@@ -102,49 +92,44 @@ async function perlustra(anthropic: Anthropic, datiTxt: string): Promise<string>
   return "";
 }
 
+async function sicuro(p: Promise<string>): Promise<string> {
+  try {
+    return await p;
+  } catch {
+    return "";
+  }
+}
+
 export async function runCycle(): Promise<Briefing> {
   const anthropic = getAnthropic();
 
-  // 1) Parte SEMPRE dai dati reali.
+  // 1) Dati reali (grounding).
   const m = await getMetriche();
   const datiTxt = m.connected
     ? `Dati reali attuali del marketplace mycity:\n${JSON.stringify(m, null, 2)}`
-    : "Il database del marketplace non e' ancora collegato: non hai dati reali, lavora su ipotesi generali e segnala che servono i dati.";
+    : "Il database del marketplace non e' collegato: niente dati reali, lavora su ipotesi e segnala che servono i dati.";
 
-  // 2) Analizza (con strumenti, ma resiliente: se qualcosa fallisce, ripiego).
-  let analisi = "";
-  try {
-    analisi = await perlustra(anthropic, datiTxt);
-  } catch {
-    analisi = "";
-  }
-  if (!analisi) {
-    try {
-      const r = await anthropic.messages.create({
-        model: MODEL,
-        max_tokens: 1500,
-        system: SYSTEM_PERLUSTRA,
-        messages: [{ role: "user", content: `${datiTxt}\n\nScrivi un'analisi concreta e idee di crescita basate su questi numeri.` }],
-      });
-      analisi = testo(r);
-    } catch {
-      /* ignora */
-    }
-  }
-  if (!analisi) analisi = datiTxt;
+  // 2) Il team al lavoro (in parallelo).
+  const analista = trovaEsperto("analista");
+  const intelligence = trovaEsperto("intelligence");
+  const [interna, esterna] = await Promise.all([
+    sicuro(runEsperto(anthropic, analista, `${datiTxt}\n\nAnalizza i numeri reali: cosa sta andando bene/male, e quali opportunita' interne di crescita vedi? Sii concreto.`)),
+    sicuro(runEsperto(anthropic, intelligence, `Marketplace di consegne a Piacenza. Cerca opportunita' esterne utili ORA: mosse dei concorrenti, trend, eventi/meteo che muovono la domanda, idee di marketing. Sii concreto.`)),
+  ]);
 
-  // 3) Struttura il briefing.
+  // 3) L'AD sintetizza.
+  const contributi = `Contributo dell'Analista (dati interni):\n${interna || "(nessuno)"}\n\nContributo dell'Intelligence (esterno):\n${esterna || "(nessuno)"}\n\nDati di riferimento:\n${datiTxt}`;
   const res2 = await anthropic.messages.create({
     model: MODEL,
     max_tokens: 2000,
     system: SYSTEM_BRIEFING,
     tools: [EMIT],
     tool_choice: { type: "tool", name: "emit_briefing" },
-    messages: [{ role: "user", content: `Analisi del giro:\n\n${analisi}` }],
+    messages: [{ role: "user", content: contributi }],
   });
   const block = (res2.content as any[]).find((b) => b.type === "tool_use");
   const briefing: Briefing = block?.input || {
-    situazione: analisi,
+    situazione: interna || esterna || datiTxt,
     opportunita: [],
     azioni: [],
   };

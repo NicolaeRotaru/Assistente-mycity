@@ -68,7 +68,7 @@ const COLORI: Record<Livello, string> = {
 // Le 16 metriche piu' importanti per un marketplace di consegne (cockpit completo).
 // "chiave" = campo restituito da /api/metriche; senza chiave = fonte non ancora
 // collegata (es. PostHog). "tipo" = come formattare il numero.
-type Tipo = "n" | "euro" | "durata" | "stelle";
+type Tipo = "n" | "euro" | "durata" | "stelle" | "perc";
 const METRICHE: {
   icon: React.ReactNode;
   label: string;
@@ -81,8 +81,8 @@ const METRICHE: {
   { icon: <Euro size={16} />, label: "Incasso oggi", fonte: "mycity", chiave: "incasso_oggi", tipo: "euro" },
   { icon: <TrendingUp size={16} />, label: "Incasso 7 giorni", fonte: "mycity", chiave: "incasso_7g", tipo: "euro" },
   { icon: <Receipt size={16} />, label: "Scontrino medio", fonte: "mycity", chiave: "scontrino_medio", tipo: "euro" },
-  { icon: <Eye size={16} />, label: "Visite sito (7gg)", fonte: "PostHog" },
-  { icon: <Percent size={16} />, label: "Conversione", fonte: "PostHog" },
+  { icon: <Eye size={16} />, label: "Visite sito (7gg)", fonte: "PostHog", chiave: "visite_7g", tipo: "n" },
+  { icon: <Percent size={16} />, label: "Conversione", fonte: "PostHog", chiave: "conversione", tipo: "perc" },
   { icon: <ShoppingCart size={16} />, label: "Carrelli abbandonati", fonte: "mycity", chiave: "carrelli", tipo: "n" },
   { icon: <UserPlus size={16} />, label: "Nuovi clienti (7gg)", fonte: "mycity", chiave: "nuovi_clienti_7g", tipo: "n" },
   { icon: <Users size={16} />, label: "Clienti attivi", fonte: "mycity", chiave: "clienti", tipo: "n" },
@@ -106,6 +106,7 @@ function formatta(v: any, tipo?: Tipo): string {
     const r = Number(v);
     return r > 0 ? `${r}/5` : "—";
   }
+  if (tipo === "perc") return `${Number(v)}%`;
   return String(v);
 }
 
@@ -200,7 +201,25 @@ export default function Dashboard() {
     }
   }
 
-  function approva(a: Azione) {
+  async function approva(a: Azione) {
+    try {
+      const res = await fetch("/api/esegui", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ azione: a }),
+      });
+      const d = await res.json();
+      if (d.collegato) {
+        setMessages((m) => [
+          ...m,
+          { role: "assistant", content: `${d.ok ? "✅ Eseguito" : "⚠️ Non riuscito"}: "${a.titolo}" — ${d.risultato || ""}` },
+        ]);
+        return;
+      }
+    } catch {
+      /* canale non disponibile: ripiego sulla pianificazione */
+    }
+    // Nessun canale d'azione collegato: l'esperto spiega i passi da fare a mano.
     send(`Approvo: "${a.titolo}". Spiegami i passi concreti per realizzarla e cosa ti serve da me.`);
   }
 
