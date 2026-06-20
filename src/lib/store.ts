@@ -69,3 +69,39 @@ export async function getRecentTimes(limit = 10): Promise<string[]> {
   const rows = (await res.json()) as { created_at: string }[];
   return rows.map((r) => r.created_at);
 }
+
+// --- Diario: tutto cio' che l'assistente dice e fa, salvato lato server ---
+// Cosi resta anche se cambi browser, dispositivo o aggiorni la pagina.
+
+export type DiarioVoce = { tipo: string; titolo: string; testo: string };
+export type DiarioRecord = DiarioVoce & { id: string; created_at: string };
+
+/** Salva una voce del diario (chat, giro, azione). */
+export async function saveDiarioVoce(v: DiarioVoce): Promise<void> {
+  if (!memoryConnected()) return;
+  await fetch(`${URL}/rest/v1/diario`, {
+    method: "POST",
+    headers: { ...headers(), Prefer: "return=minimal" },
+    body: JSON.stringify({ tipo: v.tipo, titolo: v.titolo, testo: v.testo }),
+  });
+}
+
+/** Le ultime voci del diario, dalla piu' recente. */
+export async function getDiario(limit = 200): Promise<DiarioRecord[]> {
+  if (!memoryConnected()) return [];
+  const res = await fetch(
+    `${URL}/rest/v1/diario?select=id,created_at,tipo,titolo,testo&order=created_at.desc&limit=${limit}`,
+    { headers: headers(), cache: "no-store" }
+  );
+  if (!res.ok) return [];
+  return (await res.json()) as DiarioRecord[];
+}
+
+/** Svuota il diario (tutte le voci). */
+export async function clearDiario(): Promise<void> {
+  if (!memoryConnected()) return;
+  await fetch(`${URL}/rest/v1/diario?id=not.is.null`, {
+    method: "DELETE",
+    headers: { ...headers(), Prefer: "return=minimal" },
+  });
+}

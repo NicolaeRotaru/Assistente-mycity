@@ -47,7 +47,7 @@ type Msg = {
   prompt?: boolean;
 };
 type DiarioVoce = {
-  id: number;
+  id: number | string;
   at: string;
   tipo: "chat" | "briefing" | "azione";
   titolo: string;
@@ -159,6 +159,12 @@ export default function Dashboard() {
 
   function aggiungiDiario(tipo: DiarioVoce["tipo"], titolo: string, testo: string) {
     setDiario((d) => [{ id: Date.now() + Math.random(), at: new Date().toISOString(), tipo, titolo, testo }, ...d].slice(0, 200));
+    // Salva anche nel database di memoria (server-side): resta dopo il refresh e su ogni dispositivo.
+    fetch("/api/diario", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tipo, titolo, testo }),
+    }).catch(() => {});
   }
   function cancellaChat() {
     setMessages([]);
@@ -171,6 +177,8 @@ export default function Dashboard() {
     try {
       localStorage.removeItem("mycity_diario");
     } catch {}
+    // Svuota anche la copia salvata nel database, altrimenti riappare al refresh.
+    fetch("/api/diario", { method: "DELETE" }).catch(() => {});
   }
 
   // Confeziona un prompt (con i dati attuali) da incollare in Claude col Max.
@@ -233,6 +241,17 @@ Rispondi in italiano, in modo concreto e operativo. Se ti servono dati che non v
       .then((r) => r.json())
       .then((d) => {
         if (d && d.connected) setMetriche(d);
+      })
+      .catch(() => {});
+    // Il diario salvato lato server e' la fonte durevole: se c'e', vince sul locale.
+    fetch("/api/diario")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.memoria && Array.isArray(d.voci) && d.voci.length) {
+          setDiario(
+            d.voci.map((v: any) => ({ id: v.id, at: v.created_at, tipo: v.tipo, titolo: v.titolo, testo: v.testo }))
+          );
+        }
       })
       .catch(() => {});
   }, [caricaStato]);
@@ -564,6 +583,11 @@ Rispondi in italiano, in modo concreto e operativo. Se ti servono dati che non v
               </button>
             )}
           </div>
+          <p className="text-[11px] text-black/40 mb-3">
+            {memoria
+              ? "💾 Salvato nel database: resta anche se aggiorni la pagina o cambi dispositivo."
+              : "💾 Salvato su questo browser. Collega il database di memoria per ritrovarlo ovunque."}
+          </p>
           {diario.length === 0 ? (
             <p className="text-sm text-black/40">
               Ancora niente. Qui resta salvato ogni messaggio della chat, ogni giro e ogni azione.
@@ -573,7 +597,7 @@ Rispondi in italiano, in modo concreto e operativo. Se ti servono dati che non v
               {diario.map((v) => (
                 <div key={v.id} className="border border-black/10 rounded-lg p-3">
                   <div className="flex items-center gap-2 text-xs text-black/40 mb-1">
-                    <span className="px-1.5 py-0.5 rounded-full bg-black/5">{DIARIO_TIPO[v.tipo]}</span>
+                    <span className="px-1.5 py-0.5 rounded-full bg-black/5">{DIARIO_TIPO[v.tipo] || v.tipo}</span>
                     <span className="font-medium text-ink/70">{v.titolo}</span>
                     <span className="ml-auto">{fa(v.at)}</span>
                   </div>
