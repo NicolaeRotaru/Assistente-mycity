@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAnthropic, MODEL, MODEL_FAST } from "@/lib/anthropic";
+import { getAnthropic, MODEL, MODEL_FAST, conCache } from "@/lib/anthropic";
 import { executeCustomTool, toolsFor } from "@/lib/tools";
 import { trovaEsperto, tuttiGliEsperti } from "@/lib/agents";
 
@@ -46,7 +46,7 @@ async function eseguiLoop(
   const toolsUsed = new Set<string>();
   let reply = "";
   for (let i = 0; i < 8; i++) {
-    const res = await anthropic.messages.create({ model: MODEL, max_tokens: 2000, system, tools, messages: convo });
+    const res = await anthropic.messages.create({ model: MODEL, max_tokens: 2000, system, tools, messages: conCache(convo) });
     for (const block of res.content as any[]) {
       if (block.type === "tool_use" || block.type === "server_tool_use") toolsUsed.add(block.name);
     }

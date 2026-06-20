@@ -14,3 +14,23 @@ export function getAnthropic() {
   }
   return new Anthropic({ apiKey });
 }
+
+// Prompt caching: mette un "punto di cache" sull'ultimo blocco del turno utente.
+// Le parti ripetute (istruzioni di sistema, strumenti, storico della conversazione)
+// nelle chiamate successive costano ~10% invece del 100%. Sicuro: se il prefisso e'
+// troppo corto, l'API semplicemente non mette nulla in cache (nessun errore).
+export function conCache(messages: any[]): any[] {
+  if (!messages.length) return messages;
+  const ultimo = messages[messages.length - 1];
+  if (!ultimo || ultimo.role !== "user") return messages;
+  let content: any = ultimo.content;
+  if (typeof content === "string") content = [{ type: "text", text: content }];
+  else if (Array.isArray(content)) content = content.slice();
+  else return messages;
+  const i = content.length - 1;
+  if (i < 0) return messages;
+  content[i] = { ...content[i], cache_control: { type: "ephemeral" } };
+  const out = messages.slice();
+  out[out.length - 1] = { ...ultimo, content };
+  return out;
+}

@@ -1,5 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
-import { getAnthropic, MODEL } from "@/lib/anthropic";
+import { getAnthropic, MODEL, conCache } from "@/lib/anthropic";
 import { toolsFor, executeCustomTool } from "@/lib/tools";
 import { trovaEsperto, type Esperto } from "@/lib/agents";
 import { saveBriefing, type Briefing } from "@/lib/store";
@@ -72,7 +72,7 @@ async function runEsperto(anthropic: Anthropic, esperto: Esperto, prompt: string
       max_tokens: 1600,
       system: esperto.system,
       tools,
-      messages: convo,
+      messages: conCache(convo),
     });
     if (res.stop_reason === "tool_use") {
       convo.push({ role: "assistant", content: res.content });
