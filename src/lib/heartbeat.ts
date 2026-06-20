@@ -109,16 +109,14 @@ export async function runCycle(): Promise<Briefing> {
     ? `Dati reali attuali del marketplace mycity:\n${JSON.stringify(m, null, 2)}`
     : "Il database del marketplace non e' collegato: niente dati reali, lavora su ipotesi e segnala che servono i dati.";
 
-  // 2) Il team al lavoro (in parallelo).
+  // 2) L'Analista studia i numeri reali (leggero ed economico: niente ricerca web nel giro).
   const analista = trovaEsperto("analista");
-  const intelligence = trovaEsperto("intelligence");
-  const [interna, esterna] = await Promise.all([
-    sicuro(runEsperto(anthropic, analista, `${datiTxt}\n\nAnalizza i numeri reali: cosa sta andando bene/male, e quali opportunita' interne di crescita vedi? Sii concreto.`)),
-    sicuro(runEsperto(anthropic, intelligence, `Marketplace di consegne a Piacenza. Cerca opportunita' esterne utili ORA: mosse dei concorrenti, trend, eventi/meteo che muovono la domanda, idee di marketing. Sii concreto.`)),
-  ]);
+  const interna = await sicuro(
+    runEsperto(anthropic, analista, `${datiTxt}\n\nAnalizza i numeri reali: cosa va bene/male e quali opportunita' di crescita concrete vedi? Sii specifico.`)
+  );
 
-  // 3) L'AD sintetizza.
-  const contributi = `Contributo dell'Analista (dati interni):\n${interna || "(nessuno)"}\n\nContributo dell'Intelligence (esterno):\n${esterna || "(nessuno)"}\n\nDati di riferimento:\n${datiTxt}`;
+  // 3) L'AD sintetizza il briefing.
+  const contributi = `Analisi dell'Analista (dati interni):\n${interna || "(nessuna)"}\n\nDati di riferimento:\n${datiTxt}`;
   const res2 = await anthropic.messages.create({
     model: MODEL,
     max_tokens: 2000,
@@ -129,7 +127,7 @@ export async function runCycle(): Promise<Briefing> {
   });
   const block = (res2.content as any[]).find((b) => b.type === "tool_use");
   const briefing: Briefing = block?.input || {
-    situazione: interna || esterna || datiTxt,
+    situazione: interna || datiTxt,
     opportunita: [],
     azioni: [],
   };

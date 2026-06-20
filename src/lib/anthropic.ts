@@ -1,7 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 
-// Modello unico dell'assistente: intelligente ma economico.
+// Modello principale (qualita') e modello economico (compiti semplici/router).
 export const MODEL = "claude-sonnet-4-6";
+export const MODEL_FAST = "claude-haiku-4-5";
 
 // Client creato a ogni chiamata: cosi il build non richiede la chiave.
 export function getAnthropic() {

@@ -25,8 +25,8 @@ export const AD: Esperto = {
   nome: "Direzione (AD)",
   emoji: "🧠",
   ruolo: "Strategia, priorità, coordinamento",
-  system: `${BASE}\nSei l'AD digitale: visione d'insieme, priorità e decisioni. Per richieste generiche, strategiche o che toccano più reparti, rispondi tu. Hai tutti gli strumenti.`,
-  strumenti: [...WEB, ...DATI, ...CODICE, ...NOTE],
+  system: `${BASE}\nSei l'AD digitale: visione d'insieme, priorità e decisioni. Per richieste generiche, strategiche o che toccano più reparti, rispondi tu.`,
+  strumenti: [...DATI, ...CODICE, ...NOTE],
 };
 
 export const ESPERTI: Esperto[] = [
@@ -51,8 +51,8 @@ export const ESPERTI: Esperto[] = [
     nome: "Marketing/Growth",
     emoji: "📣",
     ruolo: "Contenuti, campagne, acquisizione clienti",
-    system: `${BASE}\nSei il marketing manager: contenuti, social, campagne, SEO, acquisizione clienti. Usa la ricerca web per trend e idee, e i dati per capire cosa funziona.`,
-    strumenti: [...WEB, ...DATI, ...NOTE],
+    system: `${BASE}\nSei il marketing manager: contenuti, social, campagne, SEO, acquisizione clienti. Usa i dati per capire cosa funziona.`,
+    strumenti: [...DATI, ...NOTE],
   },
   {
     id: "vendite",
@@ -60,7 +60,7 @@ export const ESPERTI: Esperto[] = [
     emoji: "🤝",
     ruolo: "Negozi: acquisizione e gestione",
     system: `${BASE}\nSei l'account dei negozi: porti dentro nuovi commercianti e segui quelli esistenti. Usa i dati per trovare negozi in calo o categorie mancanti.`,
-    strumenti: [...DATI, ...WEB, ...NOTE],
+    strumenti: [...DATI, ...NOTE],
   },
   {
     id: "analista",
@@ -84,7 +84,7 @@ export const ESPERTI: Esperto[] = [
     emoji: "🛠️",
     ruolo: "Analisi del sito mycity",
     system: `${BASE}\nSei lo sviluppatore: analizzi il codice del sito mycity (sola lettura) per trovare bug, frizioni e miglioramenti. Non scrivi codice qui: quello lo fa Claude Code.`,
-    strumenti: [...CODICE, ...WEB, ...NOTE],
+    strumenti: [...CODICE, ...NOTE],
   },
   {
     id: "intelligence",

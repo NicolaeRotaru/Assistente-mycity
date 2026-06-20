@@ -26,6 +26,8 @@ import {
   Star,
   Trash2,
   History,
+  Copy,
+  FileText,
 } from "lucide-react";
 
 type Livello = "verde" | "giallo" | "rosso";
@@ -42,6 +44,7 @@ type Msg = {
   content: string;
   tools?: string[];
   esperto?: { nome: string; emoji: string };
+  prompt?: boolean;
 };
 type DiarioVoce = {
   id: number;
@@ -167,6 +170,41 @@ export default function Dashboard() {
     setDiario([]);
     try {
       localStorage.removeItem("mycity_diario");
+    } catch {}
+  }
+
+  // Confeziona un prompt (con i dati attuali) da incollare in Claude col Max.
+  // Costo API: ZERO — il lavoro pesante lo fai fare al tuo abbonamento.
+  function generaPrompt(richiesta: string): string {
+    const righe = metriche
+      ? METRICHE.filter((x) => x.chiave && metriche[x.chiave] !== undefined && metriche[x.chiave] !== null)
+          .map((x) => `- ${x.label}: ${formatta(metriche[x.chiave!], x.tipo)}`)
+          .join("\n")
+      : "(metriche non disponibili)";
+    const brief = briefing ? `\n\n## Ultimo briefing dell'assistente\n${briefing.situazione}` : "";
+    return `Sei il consulente di crescita di MyCity, il marketplace dei negozi di Piacenza.
+
+## Dati attuali dell'azienda
+${righe}${brief}
+
+## Compito
+${richiesta}
+
+Rispondi in italiano, in modo concreto e operativo. Se ti servono dati che non vedi qui, elenca quali.`;
+  }
+
+  function dammiPrompt() {
+    const t = input.trim();
+    if (!t) return;
+    const p = generaPrompt(t);
+    setMessages((m) => [...m, { role: "user", content: t }, { role: "assistant", content: p, prompt: true }]);
+    setInput("");
+    aggiungiDiario("chat", "📋 Prompt per Claude Max", p);
+  }
+
+  function copia(testo: string) {
+    try {
+      navigator.clipboard.writeText(testo);
     } catch {}
   }
 
@@ -435,28 +473,45 @@ export default function Dashboard() {
                 </div>
               </div>
             )}
-            {messages.map((m, i) => (
-              <div key={i} className={m.role === "user" ? "text-right" : "text-left"}>
-                {m.role === "assistant" && m.esperto && (
+            {messages.map((m, i) =>
+              m.prompt ? (
+                <div key={i} className="text-left">
                   <div className="text-xs text-black/45 mb-1">
-                    {m.esperto.emoji} {m.esperto.nome}
+                    📋 Prompt pronto — incollalo in Claude (claude.ai) col tuo Max: gratis
                   </div>
-                )}
-                <span
-                  className={`inline-block px-4 py-2.5 rounded-2xl text-sm whitespace-pre-wrap max-w-[85%] ${
-                    m.role === "user" ? "bg-brand text-white rounded-br-sm" : "bg-black/5 text-ink rounded-bl-sm"
-                  }`}
-                >
-                  {m.content}
-                </span>
-                {m.role === "assistant" && m.tools && m.tools.length > 0 && (
-                  <div className="flex items-center gap-1.5 text-xs text-black/35 mt-1">
-                    <Wrench size={12} />
-                    {m.tools.map((t) => TOOL_LABELS[t] || t).join(" · ")}
+                  <div className="border border-brand/30 bg-brand/5 rounded-lg p-3">
+                    <pre className="text-xs whitespace-pre-wrap font-sans text-ink/90">{m.content}</pre>
+                    <button
+                      onClick={() => copia(m.content)}
+                      className="mt-2 inline-flex items-center gap-1 text-xs bg-brand text-white rounded-full px-3 py-1 hover:opacity-90"
+                    >
+                      <Copy size={12} /> Copia
+                    </button>
                   </div>
-                )}
-              </div>
-            ))}
+                </div>
+              ) : (
+                <div key={i} className={m.role === "user" ? "text-right" : "text-left"}>
+                  {m.role === "assistant" && m.esperto && (
+                    <div className="text-xs text-black/45 mb-1">
+                      {m.esperto.emoji} {m.esperto.nome}
+                    </div>
+                  )}
+                  <span
+                    className={`inline-block px-4 py-2.5 rounded-2xl text-sm whitespace-pre-wrap max-w-[85%] ${
+                      m.role === "user" ? "bg-brand text-white rounded-br-sm" : "bg-black/5 text-ink rounded-bl-sm"
+                    }`}
+                  >
+                    {m.content}
+                  </span>
+                  {m.role === "assistant" && m.tools && m.tools.length > 0 && (
+                    <div className="flex items-center gap-1.5 text-xs text-black/35 mt-1">
+                      <Wrench size={12} />
+                      {m.tools.map((t) => TOOL_LABELS[t] || t).join(" · ")}
+                    </div>
+                  )}
+                </div>
+              )
+            )}
             {loading && (
               <div className="flex items-center gap-2 text-black/40 text-sm">
                 <Loader2 size={16} className="animate-spin" /> Sto lavorando...
@@ -464,22 +519,35 @@ export default function Dashboard() {
             )}
             <div ref={endRef} />
           </div>
-          <div className="border-t border-black/10 p-3 flex gap-2">
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && send()}
-              placeholder="Chiedi qualcosa o dai un obiettivo..."
-              className="flex-1 px-4 py-2.5 rounded-lg bg-black/5 outline-none text-sm focus:ring-2 focus:ring-brand/30"
-            />
-            <button
-              onClick={() => send()}
-              disabled={loading}
-              className="bg-brand text-white px-4 rounded-lg hover:opacity-90 disabled:opacity-40"
-              aria-label="Invia"
-            >
-              <Send size={18} />
-            </button>
+          <div className="border-t border-black/10 p-3 space-y-2">
+            <div className="flex gap-2">
+              <input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && send()}
+                placeholder="Chiedi qualcosa o dai un obiettivo..."
+                className="flex-1 px-4 py-2.5 rounded-lg bg-black/5 outline-none text-sm focus:ring-2 focus:ring-brand/30"
+              />
+              <button
+                onClick={dammiPrompt}
+                disabled={!input.trim()}
+                className="inline-flex items-center gap-1.5 border border-brand/40 text-brand px-3 rounded-lg text-sm hover:bg-brand/5 disabled:opacity-40"
+                title="Crea un prompt pronto da incollare in Claude col tuo Max (gratis)"
+              >
+                <FileText size={16} /> Prompt
+              </button>
+              <button
+                onClick={() => send()}
+                disabled={loading}
+                className="bg-brand text-white px-4 rounded-lg hover:opacity-90 disabled:opacity-40"
+                aria-label="Invia"
+              >
+                <Send size={18} />
+              </button>
+            </div>
+            <p className="text-[11px] text-black/40 px-1">
+              💬 <b>Invia</b> = risposta qui (usa l'API, a pagamento) · 📋 <b>Prompt</b> = lo copi e lo dai a Claude col tuo Max (gratis)
+            </p>
           </div>
           </section>
         </div>

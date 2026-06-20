@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAnthropic, MODEL } from "@/lib/anthropic";
+import { getAnthropic, MODEL, MODEL_FAST } from "@/lib/anthropic";
 import { executeCustomTool, toolsFor } from "@/lib/tools";
 import { trovaEsperto, tuttiGliEsperti } from "@/lib/agents";
 
@@ -13,7 +13,7 @@ async function scegliEsperto(anthropic: any, messaggio: string): Promise<string>
   const elenco = team.map((e) => `${e.id}: ${e.nome} — ${e.ruolo}`).join("\n");
   try {
     const res = await anthropic.messages.create({
-      model: MODEL,
+      model: MODEL_FAST,
       max_tokens: 80,
       system: `Sei lo smistatore del team MyCity. Scegli l'esperto piu' adatto a gestire il messaggio dell'utente.
 Esperti:
