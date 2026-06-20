@@ -78,12 +78,15 @@ export async function queryTable(opts: {
 }
 
 async function selectRows(table: string, qs: string): Promise<any[]> {
-  const res = await fetch(`${URL}/rest/v1/${table}?${qs}`, { headers: headers(), cache: "no-store" });
-  if (!res.ok) {
-    const e: any = await res.json().catch(() => ({}));
-    throw new Error(`${table}: ${e.message || res.status}`);
+  // Resiliente: se una tabella non e' leggibile, non blocca le altre metriche.
+  try {
+    const res = await fetch(`${URL}/rest/v1/${table}?${qs}`, { headers: headers(), cache: "no-store" });
+    if (!res.ok) return [];
+    const d = await res.json();
+    return Array.isArray(d) ? d : [];
+  } catch {
+    return [];
   }
-  return res.json();
 }
 
 export type Metriche = {

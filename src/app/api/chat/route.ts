@@ -36,6 +36,41 @@ Se la richiesta e' generica, strategica o tocca piu' reparti, scegli "ad".`,
   }
 }
 
+// Ciclo agentico: chiama il modello, esegue gli strumenti, ripete fino alla risposta.
+async function eseguiLoop(
+  anthropic: any,
+  system: string,
+  tools: any[],
+  convo: any[]
+): Promise<{ reply: string; toolsUsed: string[] }> {
+  const toolsUsed = new Set<string>();
+  let reply = "";
+  for (let i = 0; i < 8; i++) {
+    const res = await anthropic.messages.create({ model: MODEL, max_tokens: 2000, system, tools, messages: convo });
+    for (const block of res.content as any[]) {
+      if (block.type === "tool_use" || block.type === "server_tool_use") toolsUsed.add(block.name);
+    }
+    if (res.stop_reason === "tool_use") {
+      convo.push({ role: "assistant", content: res.content });
+      const results: any[] = [];
+      for (const block of res.content as any[]) {
+        if (block.type === "tool_use") {
+          results.push({ type: "tool_result", tool_use_id: block.id, content: await executeCustomTool(block.name, block.input) });
+        }
+      }
+      convo.push({ role: "user", content: results });
+      continue;
+    }
+    if (res.stop_reason === "pause_turn") {
+      convo.push({ role: "assistant", content: res.content });
+      continue;
+    }
+    reply = (res.content as any[]).filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
+    break;
+  }
+  return { reply, toolsUsed: [...toolsUsed] };
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { messages } = await req.json();
@@ -45,53 +80,18 @@ export async function POST(req: NextRequest) {
     const esperto = trovaEsperto(await scegliEsperto(anthropic, String(ultimo)));
     const tools = toolsFor(esperto.strumenti);
 
-    const convo: any[] = [...messages];
-    const toolsUsed = new Set<string>();
-    let reply = "";
-
-    for (let i = 0; i < 8; i++) {
-      const res = await anthropic.messages.create({
-        model: MODEL,
-        max_tokens: 2000,
-        system: esperto.system,
-        tools,
-        messages: convo,
-      });
-
-      for (const block of res.content as any[]) {
-        if (block.type === "tool_use" || block.type === "server_tool_use") toolsUsed.add(block.name);
-      }
-
-      if (res.stop_reason === "tool_use") {
-        convo.push({ role: "assistant", content: res.content });
-        const results: any[] = [];
-        for (const block of res.content as any[]) {
-          if (block.type === "tool_use") {
-            const out = await executeCustomTool(block.name, block.input);
-            results.push({ type: "tool_result", tool_use_id: block.id, content: out });
-          }
-        }
-        convo.push({ role: "user", content: results });
-        continue;
-      }
-
-      if (res.stop_reason === "pause_turn") {
-        convo.push({ role: "assistant", content: res.content });
-        continue;
-      }
-
-      reply = (res.content as any[])
-        .filter((b) => b.type === "text")
-        .map((b) => b.text)
-        .join("\n")
-        .trim();
-      break;
+    let out: { reply: string; toolsUsed: string[] };
+    try {
+      out = await eseguiLoop(anthropic, esperto.system, tools, [...messages]);
+    } catch {
+      // Ripiego: riprova senza ricerca web (es. se non e' attiva sull'account).
+      const senzaWeb = tools.filter((t: any) => t.name !== "web_search");
+      out = await eseguiLoop(anthropic, esperto.system, senzaWeb, [...messages]);
     }
 
-    if (!reply) reply = "Non sono riuscito a completare la risposta. Riprova.";
     return NextResponse.json({
-      reply,
-      toolsUsed: [...toolsUsed],
+      reply: out.reply || "Non sono riuscito a completare la risposta. Riprova.",
+      toolsUsed: out.toolsUsed,
       esperto: { id: esperto.id, nome: esperto.nome, emoji: esperto.emoji, ruolo: esperto.ruolo },
     });
   } catch (e: any) {

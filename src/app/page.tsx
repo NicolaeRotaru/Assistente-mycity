@@ -58,6 +58,11 @@ const TOOL_LABELS: Record<string, string> = {
   web_search: "Ricerca web",
   marketplace_elenco_file: "Elenco file del sito",
   marketplace_leggi_file: "Lettura file del sito",
+  dati_tabelle: "Tabelle del marketplace",
+  dati_query: "Dati del marketplace",
+  obsidian_cerca: "Note Obsidian",
+  obsidian_leggi: "Lettura nota Obsidian",
+  obsidian_scrivi: "Scrittura nota Obsidian",
 };
 const COLORI: Record<Livello, string> = {
   verde: "border-green-300 bg-green-50 text-green-800",
