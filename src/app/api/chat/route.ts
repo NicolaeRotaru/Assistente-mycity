@@ -1,58 +1,68 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAnthropic, MODEL } from "@/lib/anthropic";
-import { CUSTOM_TOOLS, executeCustomTool } from "@/lib/tools";
+import { executeCustomTool, toolsFor } from "@/lib/tools";
+import { trovaEsperto, tuttiGliEsperti } from "@/lib/agents";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const SYSTEM = `Sei l'assistente personale di MyCity, il marketplace dei negozi di Piacenza.
-Sei un co-pilota di business: non solo rispondi, ma USI strumenti per scoprire cose e aiutare a far crescere l'azienda.
-
-Strumenti a disposizione:
-- web_search: cerca sul web (concorrenti, trend locali, idee, prezzi, eventi).
-- dati_tabelle + dati_query: leggono i DATI REALI del marketplace dal database (ordini, clienti, incassi). Prima 'dati_tabelle' per scoprire le tabelle, poi 'dati_query' per interrogarle. Usali per domande su numeri reali.
-- marketplace_elenco_file + marketplace_leggi_file: analizzano il CODICE del sito (sola lettura).
-- obsidian_cerca + obsidian_leggi + obsidian_scrivi: la MEMORIA del business in Obsidian (decisioni, idee, roadmap, contesto). Leggi le note per il contesto; scrivi/aggiorna una nota quando l'utente te lo chiede o per registrare una decisione presa insieme.
-
-Regole:
-- Parla sempre in italiano, in modo chiaro e concreto.
-- Quando proponi azioni, spiega prima cosa faresti (mai sorprese).
-- Sei in SOLA LETTURA: analizzi e proponi, non modifichi nulla.
-- Se un dato richiede un database non ancora collegato, dillo e indica cosa serve.`;
-
-// web_search e' un tool lato Anthropic; i CUSTOM_TOOLS li eseguiamo noi.
-const TOOLS: any[] = [
-  { type: "web_search_20250305", name: "web_search", max_uses: 5 },
-  ...CUSTOM_TOOLS,
-];
+// L'AD smista il messaggio all'esperto piu' adatto.
+async function scegliEsperto(anthropic: any, messaggio: string): Promise<string> {
+  const team = tuttiGliEsperti();
+  const ids = team.map((e) => e.id);
+  const elenco = team.map((e) => `${e.id}: ${e.nome} — ${e.ruolo}`).join("\n");
+  try {
+    const res = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: 80,
+      system: `Sei lo smistatore del team MyCity. Scegli l'esperto piu' adatto a gestire il messaggio dell'utente.
+Esperti:
+${elenco}
+Se la richiesta e' generica, strategica o tocca piu' reparti, scegli "ad".`,
+      tools: [
+        {
+          name: "scegli",
+          description: "Sceglie l'esperto che gestira' il messaggio.",
+          input_schema: { type: "object", properties: { esperto: { type: "string", enum: ids } }, required: ["esperto"] },
+        },
+      ],
+      tool_choice: { type: "tool", name: "scegli" },
+      messages: [{ role: "user", content: messaggio }],
+    });
+    const b = (res.content as any[]).find((x) => x.type === "tool_use");
+    return b?.input?.esperto || "ad";
+  } catch {
+    return "ad";
+  }
+}
 
 export async function POST(req: NextRequest) {
   try {
     const { messages } = await req.json();
     const anthropic = getAnthropic();
 
+    const ultimo = [...messages].reverse().find((m: any) => m.role === "user")?.content || "";
+    const esperto = trovaEsperto(await scegliEsperto(anthropic, String(ultimo)));
+    const tools = toolsFor(esperto.strumenti);
+
     const convo: any[] = [...messages];
     const toolsUsed = new Set<string>();
     let reply = "";
 
-    // Ciclo agentico: il modello puo' chiamare piu' strumenti prima di rispondere.
     for (let i = 0; i < 8; i++) {
       const res = await anthropic.messages.create({
         model: MODEL,
         max_tokens: 2000,
-        system: SYSTEM,
-        tools: TOOLS,
+        system: esperto.system,
+        tools,
         messages: convo,
       });
 
       for (const block of res.content as any[]) {
-        if (block.type === "tool_use" || block.type === "server_tool_use") {
-          toolsUsed.add(block.name);
-        }
+        if (block.type === "tool_use" || block.type === "server_tool_use") toolsUsed.add(block.name);
       }
 
       if (res.stop_reason === "tool_use") {
-        // Strumenti nostri (custom): li eseguiamo e rimandiamo i risultati.
         convo.push({ role: "assistant", content: res.content });
         const results: any[] = [];
         for (const block of res.content as any[]) {
@@ -66,12 +76,10 @@ export async function POST(req: NextRequest) {
       }
 
       if (res.stop_reason === "pause_turn") {
-        // Ricerca web in corso lato Anthropic: rimanda per continuare.
         convo.push({ role: "assistant", content: res.content });
         continue;
       }
 
-      // end_turn: risposta finale.
       reply = (res.content as any[])
         .filter((b) => b.type === "text")
         .map((b) => b.text)
@@ -81,7 +89,11 @@ export async function POST(req: NextRequest) {
     }
 
     if (!reply) reply = "Non sono riuscito a completare la risposta. Riprova.";
-    return NextResponse.json({ reply, toolsUsed: [...toolsUsed] });
+    return NextResponse.json({
+      reply,
+      toolsUsed: [...toolsUsed],
+      esperto: { id: esperto.id, nome: esperto.nome, emoji: esperto.emoji, ruolo: esperto.ruolo },
+    });
   } catch (e: any) {
     return NextResponse.json({ reply: `Errore: ${e.message}` }, { status: 500 });
   }

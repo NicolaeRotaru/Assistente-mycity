@@ -35,7 +35,24 @@ type Opportunita = {
   sforzo: string;
 };
 type Briefing = { situazione: string; opportunita: Opportunita[]; azioni: Azione[] };
-type Msg = { role: "user" | "assistant"; content: string; tools?: string[] };
+type Msg = {
+  role: "user" | "assistant";
+  content: string;
+  tools?: string[];
+  esperto?: { nome: string; emoji: string };
+};
+
+const TEAM = [
+  { emoji: "🧠", nome: "Direzione (AD)", ruolo: "Strategia e coordinamento" },
+  { emoji: "🎧", nome: "Supporto clienti", ruolo: "Clienti e reclami" },
+  { emoji: "🛵", nome: "Operations", ruolo: "Ordini, rider, consegne" },
+  { emoji: "📣", nome: "Marketing/Growth", ruolo: "Contenuti e acquisizione" },
+  { emoji: "🤝", nome: "Vendite/Onboarding", ruolo: "Negozi" },
+  { emoji: "📊", nome: "Analista", ruolo: "KPI e report" },
+  { emoji: "💶", nome: "Finanza", ruolo: "Incassi e pagamenti" },
+  { emoji: "🛠️", nome: "Tech", ruolo: "Analisi del sito" },
+  { emoji: "🔎", nome: "Intelligence", ruolo: "Concorrenti e trend" },
+];
 
 const TOOL_LABELS: Record<string, string> = {
   web_search: "Ricerca web",
@@ -175,7 +192,7 @@ export default function Dashboard() {
         body: JSON.stringify({ messages: next }),
       });
       const data = await res.json();
-      setMessages([...next, { role: "assistant", content: data.reply, tools: data.toolsUsed }]);
+      setMessages([...next, { role: "assistant", content: data.reply, tools: data.toolsUsed, esperto: data.esperto }]);
     } catch {
       setMessages([...next, { role: "assistant", content: "Connessione fallita." }]);
     } finally {
@@ -305,12 +322,31 @@ export default function Dashboard() {
           <div className="px-5 pt-4 text-black/60 text-sm font-medium">Parla con l'assistente</div>
           <div className="flex-1 p-5 space-y-4 overflow-y-auto min-h-[200px] max-h-[420px]">
             {messages.length === 0 && (
-              <p className="text-center text-black/40 text-sm pt-6">
-                Approva un'azione qui sopra, o scrivi un obiettivo.
-              </p>
+              <div className="pt-2">
+                <p className="text-sm text-black/50 mb-3">
+                  Scrivi un obiettivo o una domanda: l'AD la assegna all'esperto giusto del team.
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  {TEAM.map((e) => (
+                    <div key={e.nome} className="flex items-start gap-2 text-xs border border-black/10 rounded-lg px-2.5 py-1.5">
+                      <span>{e.emoji}</span>
+                      <span>
+                        <span className="font-medium text-ink/80">{e.nome}</span>
+                        <br />
+                        <span className="text-black/40">{e.ruolo}</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
             {messages.map((m, i) => (
               <div key={i} className={m.role === "user" ? "text-right" : "text-left"}>
+                {m.role === "assistant" && m.esperto && (
+                  <div className="text-xs text-black/45 mb-1">
+                    {m.esperto.emoji} {m.esperto.nome}
+                  </div>
+                )}
                 <span
                   className={`inline-block px-4 py-2.5 rounded-2xl text-sm whitespace-pre-wrap max-w-[85%] ${
                     m.role === "user" ? "bg-brand text-white rounded-br-sm" : "bg-black/5 text-ink rounded-bl-sm"

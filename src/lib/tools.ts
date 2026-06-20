@@ -126,3 +126,14 @@ export async function executeCustomTool(name: string, input: any): Promise<strin
       return `Strumento sconosciuto: ${name}`;
   }
 }
+
+// web_search e' un tool lato Anthropic (non in CUSTOM_TOOLS).
+export const WEB_SEARCH_TOOL: any = { type: "web_search_20250305", name: "web_search", max_uses: 5 };
+
+// Costruisce la lista di strumenti per un esperto, dato l'elenco dei nomi permessi.
+export function toolsFor(allowed: string[]): any[] {
+  const out: any[] = [];
+  if (allowed.includes("web_search")) out.push(WEB_SEARCH_TOOL);
+  for (const t of CUSTOM_TOOLS) if (allowed.includes(t.name)) out.push(t);
+  return out;
+}
