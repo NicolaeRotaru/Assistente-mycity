@@ -3,9 +3,14 @@
 Versione ridotta per **testare solo la chat AI**.
 Niente Supabase, niente Stripe: serve una sola chiave.
 
-## Cosa fa adesso
-- Chat AI in italiano (modello Claude Sonnet)
-- Dashboard con la chat e alcune metriche segnaposto
+## Cosa fa adesso (v1 — co-pilota con strumenti)
+- Chat AI in italiano (Claude) che **usa strumenti**, non solo chiacchiera:
+  - 🔎 **ricerca sul web** (concorrenti, trend, idee) — funziona da subito;
+  - 🛠️ **analisi del marketplace mycity** (legge il codice in **sola lettura**)
+    — si attiva se colleghi un token GitHub (vedi `.env.example`, è opzionale).
+- Dashboard con la chat e metriche segnaposto (i dati reali si collegano dopo).
+
+Il piano completo e le regole sono in `PIANO.md` e `ARCHITETTURA.md`.
 
 ## Avvio in locale (3 passi)
 1. `npm install`

@@ -1,9 +1,15 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Store, Package, Bell, Euro, Loader2 } from "lucide-react";
+import { Send, Store, Package, Bell, Euro, Loader2, Wrench } from "lucide-react";
 
-type Msg = { role: "user" | "assistant"; content: string };
+type Msg = { role: "user" | "assistant"; content: string; tools?: string[] };
+
+const TOOL_LABELS: Record<string, string> = {
+  web_search: "Ricerca web",
+  marketplace_elenco_file: "Elenco file del sito",
+  marketplace_leggi_file: "Lettura file del sito",
+};
 
 export default function Dashboard() {
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -29,7 +35,10 @@ export default function Dashboard() {
         body: JSON.stringify({ messages: next }),
       });
       const data = await res.json();
-      setMessages([...next, { role: "assistant", content: data.reply }]);
+      setMessages([
+        ...next,
+        { role: "assistant", content: data.reply, tools: data.toolsUsed },
+      ]);
     } catch {
       setMessages([
         ...next,
@@ -41,9 +50,9 @@ export default function Dashboard() {
   }
 
   const suggerimenti = [
-    "Quanti ordini abbiamo avuto oggi?",
-    "Ci sono notifiche di problemi?",
-    "Quanto abbiamo incassato questa settimana?",
+    "Trova 3 modi per aumentare gli ordini questa settimana",
+    "Analizza il sito mycity e dimmi se vedi problemi o miglioramenti",
+    "Cerca sul web cosa fanno i competitor del delivery a Piacenza",
   ];
 
   return (
@@ -53,17 +62,17 @@ export default function Dashboard() {
         <div className="max-w-5xl mx-auto px-5 py-4 flex items-center gap-2">
           <span className="w-2.5 h-2.5 rounded-full bg-brand" />
           <h1 className="font-semibold text-lg">MyCity Assistant</h1>
-          <span className="ml-auto text-sm text-black/40">Piacenza</span>
+          <span className="ml-auto text-sm text-black/40">Co-pilota · Piacenza</span>
         </div>
       </header>
 
       <main className="flex-1 max-w-5xl w-full mx-auto px-5 py-6 grid lg:grid-cols-3 gap-6">
         {/* Colonna sinistra: metriche e notifiche */}
         <aside className="space-y-4">
-          <Card icon={<Package size={18} />} label="Ordini oggi" value="—" hint="Presto disponibile" />
-          <Card icon={<Euro size={18} />} label="Incasso 7 giorni" value="—" hint="Presto disponibile" />
-          <Card icon={<Bell size={18} />} label="Notifiche aperte" value="—" hint="Problemi rider, segnalazioni" />
-          <Card icon={<Store size={18} />} label="Negozi attivi" value="—" hint="Commercianti su MyCity" />
+          <Card icon={<Package size={18} />} label="Ordini oggi" value="—" hint="Da collegare (Supabase)" />
+          <Card icon={<Euro size={18} />} label="Incasso 7 giorni" value="—" hint="Da collegare (Stripe)" />
+          <Card icon={<Bell size={18} />} label="Notifiche aperte" value="—" hint="Da collegare (Supabase)" />
+          <Card icon={<Store size={18} />} label="Negozi attivi" value="—" hint="Da collegare (Supabase)" />
         </aside>
 
         {/* Colonna destra: la chat AI */}
@@ -71,7 +80,8 @@ export default function Dashboard() {
           <div className="flex-1 p-5 space-y-4 overflow-y-auto min-h-[420px] max-h-[520px]">
             {messages.length === 0 && (
               <div className="text-center text-black/50 pt-10">
-                <p className="mb-4">Chiedi qualcosa per iniziare</p>
+                <p className="mb-1 font-medium text-ink/70">Il tuo co-pilota di MyCity</p>
+                <p className="mb-4 text-sm">Può cercare sul web e analizzare il sito. Prova:</p>
                 <div className="flex flex-col gap-2 items-center">
                   {suggerimenti.map((s) => (
                     <button
@@ -96,11 +106,17 @@ export default function Dashboard() {
                 >
                   {m.content}
                 </span>
+                {m.role === "assistant" && m.tools && m.tools.length > 0 && (
+                  <div className="flex items-center gap-1.5 text-xs text-black/35 mt-1">
+                    <Wrench size={12} />
+                    {m.tools.map((t) => TOOL_LABELS[t] || t).join(" · ")}
+                  </div>
+                )}
               </div>
             ))}
             {loading && (
               <div className="flex items-center gap-2 text-black/40 text-sm">
-                <Loader2 size={16} className="animate-spin" /> Sto pensando...
+                <Loader2 size={16} className="animate-spin" /> Sto lavorando...
               </div>
             )}
             <div ref={endRef} />
@@ -112,7 +128,7 @@ export default function Dashboard() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && send()}
-              placeholder="Scrivi un comando..."
+              placeholder="Chiedi qualcosa o dai un obiettivo..."
               className="flex-1 px-4 py-2.5 rounded-lg bg-black/5 outline-none text-sm focus:ring-2 focus:ring-brand/30"
             />
             <button
