@@ -28,6 +28,7 @@ import {
   History,
   Copy,
   FileText,
+  Brain,
 } from "lucide-react";
 
 type Livello = "verde" | "giallo" | "rosso";
@@ -58,6 +59,24 @@ const DIARIO_TIPO: Record<DiarioVoce["tipo"], string> = {
   chat: "💬 Chat",
   briefing: "🔭 Giro",
   azione: "⚡ Azione",
+};
+
+type Lavoro = {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  stato: "in_attesa" | "in_corso" | "fatto" | "errore";
+  tipo: string;
+  richiesta: string;
+  risultato: string;
+  esperto: string;
+};
+
+const LAVORO_STATO: Record<string, { label: string; cls: string }> = {
+  in_attesa: { label: "⏳ In attesa", cls: "bg-amber-50 text-amber-700 ring-amber-200" },
+  in_corso: { label: "⚙️ In corso", cls: "bg-blue-50 text-blue-700 ring-blue-200" },
+  fatto: { label: "✅ Fatto", cls: "bg-green-50 text-green-700 ring-green-200" },
+  errore: { label: "⚠️ Errore", cls: "bg-red-50 text-red-700 ring-red-200" },
 };
 
 const TEAM = [
@@ -152,6 +171,7 @@ export default function Dashboard() {
 
   const [messages, setMessages] = useState<Msg[]>([]);
   const [diario, setDiario] = useState<DiarioVoce[]>([]);
+  const [lavori, setLavori] = useState<Lavoro[]>([]);
   const [caricato, setCaricato] = useState(false);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -179,6 +199,40 @@ export default function Dashboard() {
     } catch {}
     // Svuota anche la copia salvata nel database, altrimenti riappare al refresh.
     fetch("/api/diario", { method: "DELETE" }).catch(() => {});
+  }
+
+  // Manda un compito al "cervello" (Claude Code sul Max): lo esegue in background
+  // e il risultato compare qui sotto in "Lavori del cervello".
+  async function mandaAlCervello() {
+    const t = input.trim();
+    if (!t) return;
+    setInput("");
+    setMessages((m) => [
+      ...m,
+      { role: "user", content: t },
+      { role: "assistant", content: "🧠 Mandato al cervello (Max). Lo trovi qui sotto in «Lavori del cervello» quando è pronto." },
+    ]);
+    try {
+      const res = await fetch("/api/lavori", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ richiesta: t }),
+      });
+      const d = await res.json();
+      if (d.ok && d.lavoro) {
+        setLavori((l) => [d.lavoro, ...l]);
+        aggiungiDiario("chat", "🧠 Mandato al cervello", t);
+      } else {
+        setMessages((m) => [...m, { role: "assistant", content: `⚠️ ${d.error || "Non sono riuscito a creare il lavoro."}` }]);
+      }
+    } catch {
+      setMessages((m) => [...m, { role: "assistant", content: "⚠️ Connessione fallita." }]);
+    }
+  }
+
+  function svuotaLavori() {
+    setLavori([]);
+    fetch("/api/lavori", { method: "DELETE" }).catch(() => {});
   }
 
   // Confeziona un prompt (con i dati attuali) da incollare in Claude col Max.
@@ -282,6 +336,25 @@ Rispondi in italiano, in modo concreto e operativo. Se ti servono dati che non v
   useEffect(() => {
     if (caricato && briefing) try { localStorage.setItem("mycity_briefing", JSON.stringify({ briefing, ultimoAt })); } catch {}
   }, [briefing, ultimoAt, caricato]);
+
+  // Ponte col cervello (Max): controlla i lavori ogni 8s, cosi i risultati
+  // del cervello compaiono qui appena pronti.
+  useEffect(() => {
+    let stop = false;
+    const carica = async () => {
+      try {
+        const r = await fetch("/api/lavori");
+        const d = await r.json();
+        if (!stop && Array.isArray(d.lavori)) setLavori(d.lavori);
+      } catch {}
+    };
+    carica();
+    const id = setInterval(carica, 8000);
+    return () => {
+      stop = true;
+      clearInterval(id);
+    };
+  }, []);
 
   async function aggiornaOra() {
     if (aggiornando) return;
@@ -583,14 +656,6 @@ Rispondi in italiano, in modo concreto e operativo. Se ti servono dati che non v
                 className="flex-1 px-4 py-2.5 rounded-xl bg-black/[0.04] border border-transparent outline-none text-sm transition focus:bg-white focus:border-brand/30 focus:ring-2 focus:ring-brand/15"
               />
               <button
-                onClick={dammiPrompt}
-                disabled={!input.trim()}
-                className="inline-flex items-center gap-1.5 border border-brand/40 text-brand px-3.5 rounded-xl text-sm font-medium hover:bg-brand-50 active:scale-95 transition disabled:opacity-40 disabled:active:scale-100"
-                title="Crea un prompt pronto da incollare in Claude col tuo Max (gratis)"
-              >
-                <FileText size={16} /> Prompt
-              </button>
-              <button
                 onClick={() => send()}
                 disabled={loading}
                 className="bg-brand text-white px-4 rounded-xl hover:bg-brand-dark active:scale-95 transition disabled:opacity-40 disabled:active:scale-100"
@@ -599,12 +664,73 @@ Rispondi in italiano, in modo concreto e operativo. Se ti servono dati che non v
                 <Send size={18} />
               </button>
             </div>
-            <p className="text-[11px] text-black/40 px-1">
-              💬 <b>Invia</b> = risposta qui (usa l'API, a pagamento) · 📋 <b>Prompt</b> = lo copi e lo dai a Claude col tuo Max (gratis)
+            <div className="flex gap-2">
+              <button
+                onClick={dammiPrompt}
+                disabled={!input.trim()}
+                className="flex-1 inline-flex items-center justify-center gap-1.5 border border-brand/40 text-brand px-3 py-1.5 rounded-xl text-xs font-medium hover:bg-brand-50 active:scale-95 transition disabled:opacity-40 disabled:active:scale-100"
+                title="Crea un prompt pronto da incollare in Claude col tuo Max (gratis)"
+              >
+                <FileText size={14} /> Prompt (copia per Max)
+              </button>
+              <button
+                onClick={mandaAlCervello}
+                disabled={!input.trim()}
+                className="flex-1 inline-flex items-center justify-center gap-1.5 border border-brand/40 text-brand px-3 py-1.5 rounded-xl text-xs font-medium hover:bg-brand-50 active:scale-95 transition disabled:opacity-40 disabled:active:scale-100"
+                title="Manda il compito al cervello (Claude Code sul Max): pesante, gratis, in background"
+              >
+                <Brain size={14} /> Manda al cervello (Max)
+              </button>
+            </div>
+            <p className="text-[11px] text-black/40 px-1 leading-relaxed">
+              💬 <b>Invia</b> = subito (API, a pagamento) · 📋 <b>Prompt</b> = lo copi nel Max · 🧠 <b>Cervello</b> = lo fa il Max in automatico
             </p>
           </div>
           </section>
         </div>
+
+        {/* Lavori del cervello: ponte con Claude Code sul Max */}
+        <section className="bg-white rounded-2xl border border-black/[0.06] shadow-card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2.5">
+              <span className="grid place-items-center w-8 h-8 rounded-lg bg-brand-50 text-brand shrink-0">
+                <Brain size={16} />
+              </span>
+              <span className="text-[15px] font-semibold tracking-tight">Lavori del cervello (Max)</span>
+            </div>
+            {lavori.length > 0 && (
+              <button onClick={svuotaLavori} className="text-xs text-black/40 hover:text-black/70 inline-flex items-center gap-1 transition">
+                <Trash2 size={12} /> Svuota
+              </button>
+            )}
+          </div>
+          <p className="text-[11px] text-black/40 mb-3">
+            Compiti pesanti che esegue il cervello su Claude Code/Max, gratis. Se il cervello non è ancora acceso, restano «in attesa».
+          </p>
+          {lavori.length === 0 ? (
+            <p className="text-sm text-black/40">
+              Nessun lavoro. Scrivi un compito nella chat e premi «🧠 Manda al cervello».
+            </p>
+          ) : (
+            <div className="scroll-soft space-y-2 max-h-[460px] overflow-y-auto pr-1">
+              {lavori.map((lv) => (
+                <div key={lv.id} className="border border-black/[0.07] rounded-xl p-3.5">
+                  <div className="flex items-center gap-2 text-xs mb-1.5">
+                    <span className={`px-2 py-0.5 rounded-full ring-1 font-medium ${LAVORO_STATO[lv.stato]?.cls || "bg-black/5 ring-black/10 text-black/60"}`}>
+                      {LAVORO_STATO[lv.stato]?.label || lv.stato}
+                    </span>
+                    {lv.esperto && <span className="text-black/45">{lv.esperto}</span>}
+                    <span className="ml-auto text-black/40 shrink-0">{fa(lv.updated_at || lv.created_at)}</span>
+                  </div>
+                  <div className="text-sm font-medium text-ink/85">{lv.richiesta}</div>
+                  {lv.risultato && (
+                    <div className="mt-2 text-sm text-ink/85 whitespace-pre-wrap border-t border-black/[0.06] pt-2">{lv.risultato}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
 
         {/* Diario: tutto cio' che l'assistente dice e fa, salvato */}
         <section className="bg-white rounded-2xl border border-black/[0.06] shadow-card p-5">
