@@ -30,6 +30,9 @@ import {
   FileText,
   Brain,
 } from "lucide-react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkBreaks from "remark-breaks";
 
 type Livello = "verde" | "giallo" | "rosso";
 type Azione = { titolo: string; motivo: string; livello: Livello };
@@ -621,15 +624,15 @@ Rispondi in italiano, in modo concreto e operativo. Se ti servono dati che non v
                       {m.esperto.emoji} {m.esperto.nome}
                     </div>
                   )}
-                  <span
-                    className={`inline-block px-4 py-2.5 rounded-2xl text-sm whitespace-pre-wrap max-w-[85%] leading-relaxed ${
-                      m.role === "user"
-                        ? "bg-brand text-white rounded-br-md shadow-card"
-                        : "bg-black/[0.04] text-ink rounded-bl-md"
-                    }`}
-                  >
-                    {m.content}
-                  </span>
+                  {m.role === "user" ? (
+                    <span className="inline-block px-4 py-2.5 rounded-2xl rounded-br-md text-sm whitespace-pre-wrap max-w-[85%] leading-relaxed bg-brand text-white shadow-card">
+                      {m.content}
+                    </span>
+                  ) : (
+                    <div className="inline-block align-top text-left px-4 py-2.5 rounded-2xl rounded-bl-md max-w-[92%] bg-black/[0.04] text-ink">
+                      <Markdown>{m.content}</Markdown>
+                    </div>
+                  )}
                   {m.role === "assistant" && m.tools && m.tools.length > 0 && (
                     <div className="flex items-center gap-1.5 text-xs text-black/35 mt-1.5">
                       <Wrench size={12} />
@@ -724,7 +727,9 @@ Rispondi in italiano, in modo concreto e operativo. Se ti servono dati che non v
                   </div>
                   <div className="text-sm font-medium text-ink/85">{lv.richiesta}</div>
                   {lv.risultato && (
-                    <div className="mt-2 text-sm text-ink/85 whitespace-pre-wrap border-t border-black/[0.06] pt-2">{lv.risultato}</div>
+                    <div className="mt-2 text-ink/85 border-t border-black/[0.06] pt-2">
+                      <Markdown>{lv.risultato}</Markdown>
+                    </div>
                   )}
                 </div>
               ))}
@@ -772,6 +777,57 @@ Rispondi in italiano, in modo concreto e operativo. Se ti servono dati che non v
           )}
         </section>
       </main>
+    </div>
+  );
+}
+
+const MD_COMPONENTS: Components = {
+  p: ({ children }) => <p className="my-2">{children}</p>,
+  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+  em: ({ children }) => <em className="italic">{children}</em>,
+  ul: ({ children }) => <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>,
+  ol: ({ children }) => <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>,
+  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+  h1: ({ children }) => <h3 className="font-semibold text-[15px] mt-3 mb-1.5">{children}</h3>,
+  h2: ({ children }) => <h3 className="font-semibold text-[15px] mt-3 mb-1.5">{children}</h3>,
+  h3: ({ children }) => <h4 className="font-semibold text-sm mt-2.5 mb-1">{children}</h4>,
+  h4: ({ children }) => <h4 className="font-semibold text-sm mt-2.5 mb-1">{children}</h4>,
+  a: ({ children, href }) => (
+    <a href={href} target="_blank" rel="noreferrer" className="text-brand underline break-words">
+      {children}
+    </a>
+  ),
+  code: ({ className, children }) =>
+    className ? (
+      <code className={className}>{children}</code>
+    ) : (
+      <code className="bg-black/[0.06] rounded px-1 py-0.5 text-[0.85em] font-mono">{children}</code>
+    ),
+  pre: ({ children }) => (
+    <pre className="bg-black/[0.06] rounded-lg p-3 overflow-x-auto text-xs my-2">{children}</pre>
+  ),
+  blockquote: ({ children }) => (
+    <blockquote className="border-l-2 border-black/15 pl-3 text-black/70 my-2">{children}</blockquote>
+  ),
+  hr: () => <hr className="border-black/10 my-3" />,
+  table: ({ children }) => (
+    <div className="overflow-x-auto my-2">
+      <table className="w-full text-xs border-collapse">{children}</table>
+    </div>
+  ),
+  thead: ({ children }) => <thead className="bg-black/[0.04]">{children}</thead>,
+  th: ({ children }) => <th className="border border-black/10 px-2 py-1 text-left font-semibold">{children}</th>,
+  td: ({ children }) => <td className="border border-black/10 px-2 py-1 align-top">{children}</td>,
+};
+
+// Mostra il testo dell'AI come Markdown formattato (grassetti, elenchi, tabelle)
+// invece che come testo grezzo pieno di asterischi e barrette.
+function Markdown({ children }: { children: string }) {
+  return (
+    <div className="text-sm leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={MD_COMPONENTS}>
+        {children}
+      </ReactMarkdown>
     </div>
   );
 }
